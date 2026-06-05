@@ -204,3 +204,88 @@ db.notifications.deleteOne(
   { _id: ObjectId("b283218f") }
 )
 ```
+# Stage 3
+
+## Query Analysis and Optimization
+
+### The Query Given:
+
+SELECT * FROM notifications
+WHERE studentID = 1042 AND isRead = false
+ORDER BY createdAt DESC;
+
+---
+
+### Is this query accurate?
+
+Yes, this query is correct in terms of what it is trying to do.
+It fetches unread notifications for a particular student (ID 1042)
+and shows the latest ones first. The logic and syntax are fine.
+
+---
+
+### Then why is it slow?
+
+The problem is not the query itself — it is the data size.
+We have 50,000 students and 5 million notifications.
+When there is no index on the table, the database has no choice
+but to go through every single row in the notifications table
+to find the ones that match. This is called a full table scan
+and it becomes very slow as data grows.
+
+---
+
+### What I would change:
+
+First, I would add a composite index on the columns
+we are filtering and sorting by:
+
+CREATE INDEX idx_notify_student
+ON notifications(studentID, isRead, createdAt DESC);
+
+This way the database directly jumps to the relevant rows
+instead of scanning everything.
+
+Second, I would stop using SELECT * because it fetches
+all columns even if we don't need them. Instead:
+
+SELECT id, message, notificationType, createdAt
+FROM notifications
+WHERE studentID = 1042 AND isRead = false
+ORDER BY createdAt DESC;
+
+### Computation cost difference:
+
+Without index — database reads all 5 million rows every time.
+With index — database reads only the rows for that student.
+The time goes from O(n) to O(log n) which is a huge difference
+especially when the data keeps growing.
+
+---
+
+### About indexing every column:
+
+I don't think that is a good idea.
+Yes, indexes make reads faster but they slow down writes.
+Every time we insert or update a row, the database has to
+update all the indexes too. If every column is indexed,
+that becomes a lot of extra work for every single write.
+It also uses a lot more storage.
+The right approach is to only index columns that are
+frequently used in WHERE, ORDER BY or JOIN conditions.
+
+---
+
+### Query to find students who got a Placement notification in the last 7 days:
+
+SELECT DISTINCT studentID
+FROM notifications
+WHERE notificationType = 'Placement'
+AND createdAt >= NOW() - INTERVAL 7 DAY
+ORDER BY studentID;
+
+Here I used DISTINCT because one student might have received
+multiple placement notifications. The INTERVAL 7 DAY part
+makes sure we only look at the last 7 days from today.
+The notificationType column uses enum values and
+'Placement' is one of them along with 'Event' and 'Result'.
