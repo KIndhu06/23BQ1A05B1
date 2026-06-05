@@ -366,3 +366,87 @@ Cache the recent unread notifications per student in Redis.
 Load them in pages of 20 at a time.
 This reduces DB load significantly and keeps the app fast
 without much complexity added.
+# Stage 5
+
+## What is wrong with the current code
+
+The current approach loops through all 50,000 students
+one by one and for each student it sends an email, saves
+to DB, and pushes to app - all in sequence.
+
+The problems I see with this are:
+
+First, it is very slow. Doing three operations per student
+for 50,000 students one after another will take forever.
+
+Second, there is no error handling. The logs showed that
+email failed for 200 students midway. Since there is no
+retry or error catching, those 200 students just got skipped
+and we have no way to know who they are or fix it.
+
+Third, all three operations are tied together. If email
+fails, what happens to the DB save? They should not depend
+on each other like this.
+
+---
+
+## Should DB save and email happen together?
+
+No, I do not think they should.
+
+The DB save should always happen no matter what.
+The notification needs to be stored even if the email fails.
+If we tie them together and email throws an error, we might
+lose the DB entry too, which means the notification is gone
+permanently. That is worse than just a failed email.
+
+So my approach is: save to DB first always, then handle
+email and push separately.
+
+---
+
+## How I would redesign this
+
+I would use a message queue. When HR clicks Notify All,
+we immediately save all notifications to the DB and push
+50,000 jobs to a queue. Then separate workers pick up
+jobs from the queue and process them - sending emails
+and pushing to app in parallel.
+
+If email fails for some students, the worker logs it
+and retries only those specific ones. We do not redo
+everything from scratch.
+
+---
+
+## Revised Pseudocode
+
+function notify_all(student_ids: array, message: string):
+    for student_id in student_ids:
+        save_to_db(student_id, message)
+        enqueue("email_job", student_id, message)
+        enqueue("push_job", student_id, message)
+
+function email_worker(student_id, message):
+    try:
+        send_email(student_id, message)
+    except error:
+        log_failure(student_id, error)
+        schedule_retry(student_id, message)
+
+function push_worker(student_id, message):
+    try:
+        push_to_app(student_id, message)
+    except error:
+        log_failure(student_id, error)
+
+---
+
+## Why this is better
+
+DB save always happens first so no notification is lost.
+Email and push run independently so one failing does not
+affect the other.
+Failed emails are logged and retried automatically.
+The queue processes many students in parallel so it is
+much faster than a sequential loop.
