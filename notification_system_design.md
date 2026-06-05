@@ -289,3 +289,80 @@ multiple placement notifications. The INTERVAL 7 DAY part
 makes sure we only look at the last 7 days from today.
 The notificationType column uses enum values and
 'Placement' is one of them along with 'Event' and 'Result'.
+# Stage 4
+
+## The Problem
+
+Every time a student opens the app, the server goes to the
+database and fetches notifications. This happens for every
+student on every page load. When 50,000 students are using
+the app at the same time, the database gets hit thousands
+of times per second. That is why it is getting overwhelmed
+and the experience becomes slow.
+
+---
+
+## What I would do to fix this
+
+### 1. Add Caching with Redis
+
+My first thought was to use caching. Instead of going to
+the database every single time, we save the notifications
+in Redis for a short time. Redis is like a temporary memory
+that is much faster than a database.
+
+So when a student opens the app, we check Redis first.
+If the data is there, we return it directly without touching
+the database at all. Only when the cache expires or is empty
+do we go to the database.
+
+The tradeoff here is that sometimes the student might see
+slightly old notifications for a minute or two until the
+cache refreshes. But that is acceptable for most cases.
+
+---
+
+### 2. Pagination
+
+Right now it seems like all notifications are being loaded
+at once. That is unnecessary. I would load only 10 or 20
+at a time and let the student scroll to load more.
+
+This makes each request much smaller and faster.
+The downside is the student needs to scroll to see older ones
+but that is a normal pattern in most apps anyway.
+
+---
+
+### 3. Push notifications using WebSockets
+
+Instead of fetching every time the page loads, we can push
+new notifications to the student the moment they arrive.
+This way the page does not need to keep asking the server
+again and again.
+
+The tradeoff is that keeping WebSocket connections open
+for all 50,000 students at once requires more server memory.
+But it completely removes the repeated DB hits problem.
+
+---
+
+### 4. Background jobs
+
+We can prepare and compute the notifications in the
+background before the student even opens the page.
+When they open it, we just return the already ready result.
+
+The only downside is a small delay - the notification appears
+after the background job runs, not instantly. But for most
+use cases this delay is only a few seconds.
+
+---
+
+## What I would actually go with
+
+I would combine caching and pagination together.
+Cache the recent unread notifications per student in Redis.
+Load them in pages of 20 at a time.
+This reduces DB load significantly and keeps the app fast
+without much complexity added.
